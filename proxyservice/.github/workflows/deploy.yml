@@ -1,0 +1,241 @@
+name: Deploy JSON Proxy Service
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        node-version: [16.x, 18.x, 20.x]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ matrix.node-version }}
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Run security audit
+      run: npm audit --audit-level moderate
+      continue-on-error: true
+    
+    - name: Start server for testing
+      run: |
+        npm start &
+        sleep 5
+        SERVER_PID=$!
+    
+    - name: Test server health
+      run: |
+        curl -f http://localhost:3000/health || exit 1
+        echo "Health check passed"
+    
+    - name: Test API endpoints
+      run: |
+        # Test invalid URL
+        response=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:3000/api/create-proxy -H "Content-Type: application/json" -d '{"url":"invalid-url"}')
+        if [ "$response" != "400" ]; then
+          echo "Expected 400 for invalid URL, got $response"
+          exit 1
+        fi
+        
+        # Test valid JSON URL
+        response=$(curl -s -X POST http://localhost:3000/api/create-proxy -H "Content-Type: application/json" -d '{"url":"https://jsonplaceholder.typicode.com/posts/1"}')
+        if ! echo "$response" | grep -q "success"; then
+          echo "API test failed: $response"
+          exit 1
+        fi
+        
+        echo "API tests passed"
+
+  # Deploy to Heroku
+  deploy-heroku:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Deploy to Heroku
+      uses: akhileshns/heroku-deploy@v3.12.14
+      with:
+        heroku_api_key: ${{ secrets.HEROKU_API_KEY }}
+        heroku_app_name: ${{ secrets.HEROKU_APP_NAME }}
+        heroku_email: ${{ secrets.HEROKU_EMAIL }}
+        healthcheck: "https://${{ secrets.HEROKU_APP_NAME }}.herokuapp.com/health"
+        checkstring: "OK"
+        delay: 5
+      env:
+        HD_NODE_VERSION: 18
+
+  # Deploy to Vercel
+  deploy-vercel:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+    
+    - name: Install Vercel CLI
+      run: npm install --global vercel@latest
+    
+    - name: Pull Vercel Environment Information
+      run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+    
+    - name: Build Project Artifacts
+      run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+    
+    - name: Deploy Project Artifacts to Vercel
+      run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
+
+  # Deploy to DigitalOcean App Platform
+  deploy-digitalocean:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Install doctl
+      uses: digitalocean/action-doctl@v2
+      with:
+        token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+    
+    - name: Deploy to DigitalOcean App Platform
+      run: |
+        doctl apps create-deployment ${{ secrets.DIGITALOCEAN_APP_ID }} --wait
+      if: secrets.DIGITALOCEAN_ACCESS_TOKEN && secrets.DIGITALOCEAN_APP_ID
+
+  # Deploy to Railway
+  deploy-railway:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+    
+    - name: Install Railway CLI
+      run: npm install -g @railway/cli
+    
+    - name: Deploy to Railway
+      run: railway up --service ${{ secrets.RAILWAY_SERVICE_ID }}
+      env:
+        RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }
+      if: secrets.RAILWAY_TOKEN && secrets.RAILWAY_SERVICE_ID
+
+  # Deploy to AWS Elastic Beanstalk
+  deploy-aws:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci --only=production
+    
+    - name: Create deployment package
+      run: |
+        zip -r deploy.zip . -x "*.git*" "node_modules/.cache/*" "*.log"
+    
+    - name: Deploy to AWS Elastic Beanstalk
+      uses: einaregilsson/beanstalk-deploy@v21
+      with:
+        aws_access_key: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws_secret_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        application_name: ${{ secrets.AWS_EB_APPLICATION_NAME }}
+        environment_name: ${{ secrets.AWS_EB_ENVIRONMENT_NAME }}
+        region: ${{ secrets.AWS_REGION }}
+        version_label: ${{ github.sha }}
+        deployment_package: deploy.zip
+      if: secrets.AWS_ACCESS_KEY_ID && secrets.AWS_SECRET_ACCESS_KEY
+
+  # Deploy via Docker to any container platform
+  deploy-docker:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Login to Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+      if: secrets.DOCKER_USERNAME && secrets.DOCKER_PASSWORD
+    
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: true
+        tags: ${{ secrets.DOCKER_USERNAME }}/json-proxy-service:latest,${{ secrets.DOCKER_USERNAME }}/json-proxy-service:${{ github.sha }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+      if: secrets.DOCKER_USERNAME && secrets.DOCKER_PASSWORD
+
+  # Notify deployment status
+  notify:
+    needs: [deploy-heroku, deploy-vercel, deploy-digitalocean, deploy-railway, deploy-aws, deploy-docker]
+    runs-on: ubuntu-latest
+    if: always() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    
+    steps:
+    - name: Notify deployment status
+      run: |
+        if [ "${{ needs.deploy-heroku.result }}" == "success" ] || 
+           [ "${{ needs.deploy-vercel.result }}" == "success" ] || 
+           [ "${{ needs.deploy-digitalocean.result }}" == "success" ] || 
+           [ "${{ needs.deploy-railway.result }}" == "success" ] || 
+           [ "${{ needs.deploy-aws.result }}" == "success" ] || 
+           [ "${{ needs.deploy-docker.result }}" == "success" ]; then
+          echo "✅ Deployment successful to at least one platform"
+        else
+          echo "❌ All deployments failed or were skipped"
+        fi
