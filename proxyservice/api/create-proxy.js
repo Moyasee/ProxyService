@@ -1,5 +1,5 @@
-import axios from 'axios';
-import { URL } from 'url';
+const axios = require('axios');
+const { URL } = require('url');
 
 // Utility function to validate URL
 function isValidUrl(string) {
@@ -16,7 +16,7 @@ function isJsonContent(contentType) {
   return contentType && contentType.toLowerCase().includes('application/json');
 }
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   // Set CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
