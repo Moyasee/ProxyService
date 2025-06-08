@@ -1,5 +1,5 @@
-const axios = require('axios');
-const { URL } = require('url');
+import axios from 'axios';
+import { URL } from 'url';
 
 // Utility function to validate URL
 function isValidUrl(string) {
