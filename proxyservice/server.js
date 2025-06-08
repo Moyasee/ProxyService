@@ -171,8 +171,13 @@ app.get('/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString() });
 });
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`JSON Proxy Service running on port ${PORT}`);
-  console.log(`Access the service at: http://localhost:${PORT}`);
-});
+// Export for Vercel serverless functions
+module.exports = app;
+
+// Start server only in local development
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`JSON Proxy Service running on port ${PORT}`);
+    console.log(`Access the service at: http://localhost:${PORT}`);
+  });
+}
