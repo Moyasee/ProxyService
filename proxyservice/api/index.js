@@ -6,13 +6,11 @@ const path = require('path');
 const { URL } = require('url');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
 
 // Middleware
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(express.static('public'));
 
 // Rate limiting: 30 requests per minute per IP
 const limiter = rateLimit({
@@ -49,44 +47,36 @@ app.post('/api/create-proxy', async (req, res) => {
   // Validate URL format
   if (!url || !isValidUrl(url)) {
     return res.status(400).json({
-      error: 'Invalid URL format'
+      error: 'Invalid URL format',
+      message: 'Please provide a valid URL'
     });
   }
 
   try {
     // Check if the URL returns JSON content
     const response = await axios.head(url, {
-      timeout: 10000,
-      maxContentLength: 2 * 1024 * 1024, // 2MB limit
-      validateStatus: function (status) {
-        return status >= 200 && status < 300;
-      }
+      timeout: 5000,
+      maxRedirects: 5
     });
 
     const contentType = response.headers['content-type'];
-    const contentLength = response.headers['content-length'];
-
-    // Check content type
+    
     if (!isJsonContent(contentType)) {
       return res.status(400).json({
-        error: 'URL does not serve JSON content (application/json)'
+        error: 'Invalid content type',
+        message: 'The URL does not serve JSON content',
+        contentType: contentType || 'unknown'
       });
     }
 
-    // Check file size (2MB limit)
-    if (contentLength && parseInt(contentLength) > 2 * 1024 * 1024) {
-      return res.status(400).json({
-        error: 'JSON file size exceeds 2MB limit'
-      });
-    }
-
-    // Generate proxy URL
+    // Create proxy URL
     const proxyUrl = `${req.protocol}://${req.get('host')}/proxy?url=${encodeURIComponent(url)}`;
-
+    
     res.json({
       success: true,
+      originalUrl: url,
       proxyUrl: proxyUrl,
-      originalUrl: url
+      contentType: contentType
     });
 
   } catch (error) {
@@ -94,76 +84,99 @@ app.post('/api/create-proxy', async (req, res) => {
     
     if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
       return res.status(400).json({
-        error: 'Unable to reach the provided URL'
+        error: 'URL not accessible',
+        message: 'The provided URL could not be reached'
       });
     }
     
-    if (error.response && error.response.status) {
-      return res.status(400).json({
-        error: `URL returned status code: ${error.response.status}`
+    if (error.code === 'ETIMEDOUT') {
+      return res.status(408).json({
+        error: 'Request timeout',
+        message: 'The URL took too long to respond'
       });
     }
-
+    
     res.status(500).json({
-      error: 'Internal server error while validating URL'
+      error: 'Server error',
+      message: 'An error occurred while validating the URL'
     });
   }
 });
 
-// Proxy endpoint to serve JSON content
+// Proxy endpoint
 app.get('/proxy', async (req, res) => {
   const { url } = req.query;
 
+  // Validate URL
   if (!url || !isValidUrl(url)) {
     return res.status(400).json({
-      error: 'Invalid or missing URL parameter'
+      error: 'Invalid URL',
+      message: 'Please provide a valid URL parameter'
     });
   }
 
   try {
+    // Fetch the JSON content
     const response = await axios.get(url, {
-      timeout: 10000,
+      timeout: 10000, // 10 seconds timeout
       maxContentLength: 2 * 1024 * 1024, // 2MB limit
-      responseType: 'json',
-      validateStatus: function (status) {
-        return status >= 200 && status < 300;
+      maxRedirects: 5,
+      headers: {
+        'Accept': 'application/json',
+        'User-Agent': 'JSON-Proxy-Service/1.0'
       }
     });
+
+    // Verify content type
+    const contentType = response.headers['content-type'];
+    if (!isJsonContent(contentType)) {
+      return res.status(400).json({
+        error: 'Invalid content type',
+        message: 'The URL does not serve JSON content',
+        contentType: contentType || 'unknown'
+      });
+    }
 
     // Set appropriate headers
     res.set({
       'Content-Type': 'application/json',
-      'Cache-Control': 'no-cache',
-      'Access-Control-Allow-Origin': '*'
+      'Cache-Control': 'public, max-age=300', // 5 minutes cache
+      'X-Proxy-Source': url
     });
 
     // Return the JSON content
     res.json(response.data);
 
   } catch (error) {
-    console.error('Error proxying URL:', error.message);
+    console.error('Proxy error:', error.message);
     
     if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
-      return res.status(400).json({
-        error: 'Unable to reach the provided URL'
+      return res.status(404).json({
+        error: 'URL not found',
+        message: 'The requested URL could not be reached'
       });
     }
     
-    if (error.response && error.response.status) {
-      return res.status(error.response.status).json({
-        error: `Source URL returned status code: ${error.response.status}`
+    if (error.code === 'ETIMEDOUT') {
+      return res.status(408).json({
+        error: 'Request timeout',
+        message: 'The URL took too long to respond'
       });
     }
-
+    
+    if (error.response) {
+      return res.status(error.response.status).json({
+        error: 'HTTP error',
+        message: `The URL returned status ${error.response.status}`,
+        status: error.response.status
+      });
+    }
+    
     res.status(500).json({
-      error: 'Internal server error while proxying URL'
+      error: 'Proxy error',
+      message: 'An error occurred while fetching the content'
     });
   }
-});
-
-// Serve the main page
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 // Health check endpoint
@@ -171,14 +184,14 @@ app.get('/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString() });
 });
 
-// Export for Vercel serverless functions
-module.exports = app;
+// For Vercel serverless functions
+module.exports = (req, res) => {
+  return app(req, res);
+};
 
-// For Vercel, also export as default
-module.exports.default = app;
-
-// Start server only in local development
+// For local development
 if (require.main === module) {
+  const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => {
     console.log(`JSON Proxy Service running on port ${PORT}`);
     console.log(`Access the service at: http://localhost:${PORT}`);
