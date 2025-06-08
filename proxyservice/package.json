@@ -2,6 +2,7 @@
   "name": "json-proxy-service",
   "version": "1.0.0",
   "description": "A web service that proxies JSON files via URL",
+  "type": "module",
   "scripts": {},
   "dependencies": {
     "express": "^4.18.2",
