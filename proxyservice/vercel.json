@@ -1,21 +1,7 @@
 {
   "functions": {
-    "api/index.js": {
+    "api/*.js": {
       "maxDuration": 10
     }
-  },
-  "rewrites": [
-    {
-      "source": "/api/(.*)",
-      "destination": "/api"
-    },
-    {
-      "source": "/proxy",
-      "destination": "/api"
-    },
-    {
-      "source": "/health",
-      "destination": "/api"
-    }
-  ]
+  }
 }

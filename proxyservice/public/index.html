@@ -180,7 +180,7 @@
             showLoading(true);
             
             try {
-                const response = await fetch('/.netlify/functions/create-proxy', {
+                const response = await fetch('/api/create-proxy', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
