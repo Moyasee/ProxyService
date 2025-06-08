@@ -174,6 +174,9 @@ app.get('/health', (req, res) => {
 // Export for Vercel serverless functions
 module.exports = app;
 
+// For Vercel, also export as default
+module.exports.default = app;
+
 // Start server only in local development
 if (require.main === module) {
   app.listen(PORT, () => {
